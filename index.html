@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<!-- 加到主畫面後以全螢幕開啟（沒有 Safari 網址列） -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="客廳時鐘">
+<title>客廳時鐘</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; background: #000; color: #fff;
+    font-family: -apple-system, "PingFang TC", "Helvetica Neue", sans-serif;
+    -webkit-user-select: none; -webkit-touch-callout: none;
+  }
+  .bg {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    background-size: cover; background-position: center;
+    opacity: 0; -webkit-transition: opacity 2.5s ease; transition: opacity 2.5s ease;
+  }
+  .bg.show { opacity: 1; }
+  /* 漸層遮罩，讓白字在亮的照片上也看得清楚 */
+  #shade {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    background: -webkit-linear-gradient(top, rgba(0,0,0,0.05) 30%, rgba(0,0,0,0.55) 100%);
+    background: linear-gradient(to bottom, rgba(0,0,0,0.05) 30%, rgba(0,0,0,0.55) 100%);
+  }
+  /* 夜間變暗 */
+  #night {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    background: #000; opacity: 0; pointer-events: none;
+    -webkit-transition: opacity 3s; transition: opacity 3s;
+  }
+  #panel { line-height: 1.15;
+    position: absolute; left: 6vw; bottom: 7vh; right: 6vw;
+    text-shadow: 0 2px 12px rgba(0,0,0,0.45);
+  }
+  #time { font-size: 32vmin; font-weight: 200; line-height: 1; letter-spacing: -0.02em; }
+  #time .sec { font-size: 0.35em; opacity: 0.7; margin-left: 0.15em; }
+  #date { font-size: 9vmin; font-weight: 300; margin-top: 1.5vmin; opacity: 0.95; }
+  #weather { position: absolute; right: 6vw; top: 6vh; text-align: right; text-shadow: 0 2px 10px rgba(0,0,0,0.45); }
+  #wtemp { font-size: 13vmin; font-weight: 200; line-height: 1; }
+  #wdesc { font-size: 5.5vmin; font-weight: 300; opacity: 0.9; margin-top: 1vmin; }
+</style>
+</head>
+<body>
+  <div id="bgA" class="bg"></div>
+  <div id="bgB" class="bg"></div>
+  <div id="shade"></div>
+
+  <div id="weather"><div id="wtemp"></div><div id="wdesc"></div></div>
+  <div id="panel">
+    <div id="time"></div>
+    <div id="date"></div>
+  </div>
+
+  <div id="night"></div>
+
+<script>
+/* ================= 設定區：照自己喜好改 ================= */
+var CONFIG = {
+  // 背景圖片：放在 images/ 資料夾，把檔名列在這裡。
+  // 留空 [] 就會自動用網路上的隨機風景照 (picsum.photos)。
+  images: [
+    // "images/01.jpg",
+    // "images/02.jpg"
+  ],
+  bgIntervalMin: 10,        // 幾分鐘換一張背景
+  showSeconds: false,       // 是否顯示秒
+  use24h: true,             // 24 小時制
+  weather: true,            // 顯示天氣 (Open-Meteo，免金鑰)
+  lat: 25.0330, lon: 121.5654, // 天氣地點（預設台北）
+  nightStart: 23, nightEnd: 7, // 夜間變暗的時段
+  nightDim: 0.7             // 夜間變暗程度 0~1
+};
+/* ======================================================= */
+
+// 注意：iOS 12 Safari 不支援 ?. 和 ?? 語法，這裡刻意寫得比較保守
+
+var WEEK = ["日", "一", "二", "三", "四", "五", "六"];
+function pad(n) { return n < 10 ? "0" + n : "" + n; }
+
+function tick() {
+  var d = new Date();
+  var h = d.getHours();
+  var hh = CONFIG.use24h ? pad(h) : ((h % 12) || 12);
+  var html = hh + ":" + pad(d.getMinutes());
+  if (CONFIG.showSeconds) html += '<span class="sec">' + pad(d.getSeconds()) + "</span>";
+  if (!CONFIG.use24h) html += '<span class="sec">' + (h < 12 ? "上午" : "下午") + "</span>";
+  document.getElementById("time").innerHTML = html;
+  document.getElementById("date").textContent =
+    d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日　星期" + WEEK[d.getDay()];
+
+  var isNight = CONFIG.nightStart > CONFIG.nightEnd
+    ? (h >= CONFIG.nightStart || h < CONFIG.nightEnd)
+    : (h >= CONFIG.nightStart && h < CONFIG.nightEnd);
+  document.getElementById("night").style.opacity = isNight ? CONFIG.nightDim : 0;
+
+  // 每天凌晨 4:00 重新整理一次，避免老手機長時間跑下來記憶體累積
+  if (h === 4 && d.getMinutes() === 0 && d.getSeconds() < 2 && performance.now() > 120000) {
+    location.reload();
+  }
+}
+
+/* ---------- 背景輪播（先預載再淡入，避免閃爍） ---------- */
+var layers = [document.getElementById("bgA"), document.getElementById("bgB")];
+var front = 0, imgIndex = -1;
+
+function nextUrl() {
+  if (CONFIG.images.length) {
+    imgIndex = (imgIndex + 1) % CONFIG.images.length;
+    return CONFIG.images[imgIndex];
+  }
+  // iPhone 6 螢幕 1334x750，抓剛好大小就好，省記憶體
+  var w = window.innerWidth > window.innerHeight ? 1334 : 750;
+  var h = w === 1334 ? 750 : 1334;
+  return "https://picsum.photos/" + w + "/" + h + "?random=" + Date.now();
+}
+
+function changeBg() {
+  var url = nextUrl();
+  var img = new Image();
+  img.onload = function () {
+    var back = 1 - front;
+    layers[back].style.backgroundImage = "url('" + img.src + "')";
+    layers[back].className = "bg show";
+    layers[front].className = "bg";
+    front = back;
+  };
+  img.onerror = function () { setTimeout(changeBg, 60000); };
+  img.src = url;
+}
+
+/* ---------- 天氣 ---------- */
+var WCODE = {
+  0: "晴", 1: "大致晴朗", 2: "多雲", 3: "陰", 45: "霧", 48: "霧",
+  51: "毛毛雨", 53: "毛毛雨", 55: "毛毛雨", 61: "小雨", 63: "中雨", 65: "大雨",
+  66: "凍雨", 67: "凍雨", 71: "小雪", 73: "中雪", 75: "大雪", 77: "雪",
+  80: "陣雨", 81: "陣雨", 82: "強陣雨", 95: "雷雨", 96: "雷雨", 99: "雷雨"
+};
+
+function loadWeather() {
+  if (!CONFIG.weather || !window.fetch) return;
+  var url = "https://api.open-meteo.com/v1/forecast?latitude=" + CONFIG.lat +
+    "&longitude=" + CONFIG.lon +
+    "&current_weather=true&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=1";
+  fetch(url).then(function (r) { return r.json(); }).then(function (j) {
+    var c = j.current_weather;
+    document.getElementById("wtemp").textContent = Math.round(c.temperature) + "°";
+    var desc = WCODE[c.weathercode] || "";
+    if (j.daily) {
+      desc += "　" + Math.round(j.daily.temperature_2m_min[0]) + "° / " + Math.round(j.daily.temperature_2m_max[0]) + "°";
+      var p = j.daily.precipitation_probability_max;
+      if (p && p[0] != null) desc += "　☂ " + p[0] + "%";
+    }
+    document.getElementById("wdesc").textContent = desc;
+  })["catch"](function () { /* 沒網路就先不顯示 */ });
+}
+
+/* ---------- 離線快取（需要 https，例如放在 GitHub Pages） ---------- */
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  navigator.serviceWorker.register("sw.js");
+}
+
+/* ---------- 啟動 ---------- */
+tick();
+setInterval(tick, 1000);
+changeBg();
+setInterval(changeBg, CONFIG.bgIntervalMin * 60 * 1000);
+loadWeather();
+setInterval(loadWeather, 30 * 60 * 1000);
+// 點一下畫面立刻換下一張背景
+document.body.addEventListener("click", changeBg);
+</script>
+</body>
+</html>
